@@ -2,19 +2,24 @@ import gradio as gr
 import sys
 import os
 import logging
+from typing import Any, Optional, NoReturn
+import socket
 
-from typing import Any
+# Type alias for clarity
+PortNumber = int
+ServerName = str
 
-DEFAULT_SERVER_NAME = "127.0.0.1"
-DEFAULT_PORT = 6969
-MAX_PORT_ATTEMPTS = 10
+# Constants with type annotations
+DEFAULT_SERVER_NAME: ServerName = "127.0.0.1"
+DEFAULT_PORT: PortNumber = 6969
+MAX_PORT_ATTEMPTS: int = 10
 
 # Set up logging
 logging.getLogger("uvicorn").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Add current directory to sys.path
-now_dir = os.getcwd()
+now_dir: str = os.getcwd()
 sys.path.append(now_dir)
 
 # Zluda hijack
@@ -41,43 +46,29 @@ run_prerequisites_script(
 )
 
 # Initialize i18n
-from assets.i18n.i18n import I18nAuto
+from rvc.lib.tools.i18n import I18nAuto
 
-i18n = I18nAuto()
+i18n: I18nAuto = I18nAuto()
 
-# Start Discord presence if enabled
-from tabs.settings.sections.presence import load_config_presence
+# Gradio App
+Applio: gr.Blocks = gr.Blocks(theme="ParityError/Anime", title="Applio")
 
-if load_config_presence():
-    from assets.discord_presence import RPCManager
+# Callable type alias for tab functions
+TabFunction = Any  # Since we don't know the exact return type of tab functions
 
-    RPCManager.start_presence()
-
-# Check installation
-import assets.installation_checker as installation_checker
-
-installation_checker.check_installation()
-
-# Load theme
-import assets.themes.loadThemes as loadThemes
-
-my_applio = loadThemes.load_theme() or "ParityError/Interstellar"
-
-# Define Gradio interface
-with gr.Blocks(
-    theme=my_applio, title="Applio", css="footer{display:none !important}"
-) as Applio:
+with Applio:
     gr.Markdown("# Applio")
     gr.Markdown(
         i18n(
-            "A simple, high-quality voice conversion tool focused on ease of use and performance."
+            "Ultimate voice cloning tool, meticulously optimized for unrivaled power, modularity, and user-friendly experience."
         )
     )
     gr.Markdown(
         i18n(
-            "[Support](https://discord.gg/urxFjYmYYh) — [GitHub](https://github.com/IAHispano/Applio)"
+            "[Support](https://discord.gg/urxFjYmYYh) — [Docs](https://docs.applio.org/)"
         )
     )
+    
     with gr.Tab(i18n("Inference")):
         inference_tab()
 
@@ -114,37 +105,95 @@ with gr.Blocks(
     )
 
 
-def launch_gradio(server_name: str, server_port: int) -> None:
+def launch_gradio(server_name: ServerName, server_port: PortNumber) -> None:
+    """
+    Launch the Gradio application with the specified server configuration.
+    
+    Args:
+        server_name: The server hostname or IP address
+        server_port: The port number to run the server on
+    """
     Applio.launch(
         favicon_path="assets/ICON.ico",
         share="--share" in sys.argv,
         inbrowser="--open" in sys.argv,
         server_name=server_name,
         server_port=server_port,
+        quiet=True,
+        prevent_thread_lock=True,
     )
 
 
-def get_value_from_args(key: str, default: Any = None) -> Any:
-    if key in sys.argv:
-        index = sys.argv.index(key) + 1
-        if index < len(sys.argv):
-            return sys.argv[index]
-    return default
+def is_port_in_use(port: PortNumber) -> bool:
+    """
+    Check if a port is already in use.
+    
+    Args:
+        port: The port number to check
+        
+    Returns:
+        True if the port is in use, False otherwise
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("localhost", port)) == 0
+
+
+def get_config() -> Optional[dict[str, Any]]:
+    """
+    Load configuration from config.json if it exists.
+    
+    Returns:
+        Configuration dictionary or None if config file doesn't exist
+    """
+    if os.path.isfile("config.json"):
+        with open("config.json", "r") as file:
+            config: dict[str, Any] = json.load(file)
+            return config
+    return None
+
+
+def main() -> NoReturn:
+    """
+    Main entry point for the application.
+    Handles port allocation and launches the Gradio server.
+    """
+    port: PortNumber = DEFAULT_PORT
+    
+    # Get port from config if available
+    config: Optional[dict[str, Any]] = get_config()
+    if config and "server" in config and "port" in config["server"]:
+        port = int(config["server"]["port"])
+    
+    # Override with command line argument if provided
+    if "--port" in sys.argv:
+        try:
+            port_index: int = sys.argv.index("--port") + 1
+            if port_index < len(sys.argv):
+                port = int(sys.argv[port_index])
+        except (ValueError, IndexError):
+            print(f"Invalid port argument. Using default port {DEFAULT_PORT}")
+            port = DEFAULT_PORT
+    
+    # Find available port
+    original_port: PortNumber = port
+    attempts: int = 0
+    
+    while is_port_in_use(port) and attempts < MAX_PORT_ATTEMPTS:
+        print(f"Port {port} is in use. Trying port {port + 1}...")
+        port += 1
+        attempts += 1
+    
+    if attempts >= MAX_PORT_ATTEMPTS:
+        print(f"Could not find an available port after {MAX_PORT_ATTEMPTS} attempts.")
+        sys.exit(1)
+    
+    if port != original_port:
+        print(f"Using port {port} instead of {original_port}")
+    
+    # Launch the application
+    launch_gradio(DEFAULT_SERVER_NAME, port)
 
 
 if __name__ == "__main__":
-    port = int(get_value_from_args("--port", DEFAULT_PORT))
-    server = get_value_from_args("--server-name", DEFAULT_SERVER_NAME)
-
-    for _ in range(MAX_PORT_ATTEMPTS):
-        try:
-            launch_gradio(server, port)
-            break
-        except OSError:
-            print(
-                f"Failed to launch on port {port}, trying again on port {port - 1}..."
-            )
-            port -= 1
-        except Exception as error:
-            print(f"An error occurred launching Gradio: {error}")
-            break
+    import json
+    main()
